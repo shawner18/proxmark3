@@ -1,0 +1,14 @@
+Script started on 2025-12-31 16:38:25-06:00 [TERM="xterm-256color" TTY="/dev/cons0" COLUMNS="120" LINES="30"]
+[?2004h]0;ProxSpace v3.11 - MINGW64:~/proxmark3[32mpm3 [33m~/proxmark3[0m$ [7mscript run fm11rf08s_recovery[27m[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[C[Cscript run fm11rf08s_recovery
+[?2004lScript started, output log file is 'run'.
+[?2004h]0;ProxSpace v3.11 - MINGW64:~/proxmark3[32mpm3 [33m~/proxmark3[0m$ 
+[?2004l[?2004h]0;ProxSpace v3.11 - MINGW64:~/proxmark3[32mpm3 [33m~/proxmark3[0m$ 
+[?2004l[?2004h]0;ProxSpace v3.11 - MINGW64:~/proxmark3[32mpm3 [33m~/proxmark3[0m$ 
+[?2004l[?2004h]0;ProxSpace v3.11 - MINGW64:~/proxmark3[32mpm3 [33m~/proxmark3[0m$ 
+[?2004l[?2004h]0;ProxSpace v3.11 - MINGW64:~/proxmark3[32mpm3 [33m~/proxmark3[0m$ exit
+[?2004lexit
+Script done.
+[?2004h]0;ProxSpace v3.11 - MINGW64:~/proxmark3[32mpm3 [33m~/proxmark3[0m$ script run fm11rf08s_recoverye[K[K[K[K[K[K[K[K[K[K[K[K[K[K[K[K[K[K[K[K[K[K[K[K[K[K[K[K[K[Kexit
+[?2004lexit
+
+Script done on 2025-12-31 16:39:09-06:00 [COMMAND_EXIT_CODE="0"]
