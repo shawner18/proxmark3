@@ -14,17 +14,24 @@ except ModuleNotFoundError:
         return str(s)
 
 parser = argparse.ArgumentParser(description='A script to help with raw USCUID-UL commands. Out of everything until -s, only one functionality can be used at a time, prioritised in order listed below.')
-parser.add_argument('-f', '--file', type=str, help='Path to bin file to write')
+parser.add_argument('-f', '--file', nargs='+', help='Path to bin file to write (supports unquoted paths with spaces)')
 parser.add_argument('-r', '--retries', type=int, default=3, help='Number of times to attempt writes')
 parser.add_argument('--skip-gen2', action='store_true', default=False, help='Skip checking for Gen 2 capability (use with caution)')
 parser.add_argument('--echo-trailer', action='store_true', default=False, help='Echo trailer write commands instead of executing them')
-parser.add_argument('--keyfile', type=str, help='Path to key file to use for final dump')
+parser.add_argument('--keyfile', nargs='+', help='Path to key file to use for final dump (supports unquoted paths with spaces)')
 
 args = parser.parse_args()
-file = args.file if args.file else "Bambu-Lab-RFID-Library\\PLA\\PLA Basic\\Black\\F41347D4\\hf-mf-F41347D4-dump.bin"
+# Support file and keyfile passed as multiple tokens (unquoted paths with spaces)
+if hasattr(args, 'file') and args.file:
+    file = ' '.join(args.file)
+else:
+    file = "Bambu-Lab-RFID-Library\\PLA\\PLA Basic\\Black\\F41347D4\\hf-mf-F41347D4-dump.bin"
+# strip surrounding quotes if present
+file = file.strip('"\'')
+
 # Determine keyfile: if not supplied, derive from dump filename
 if hasattr(args, 'keyfile') and args.keyfile:
-    keyfile = args.keyfile
+    keyfile = ' '.join(args.keyfile)
 else:
     # Use os.path to properly handle relative paths
     base, ext = os.path.splitext(file)
@@ -32,6 +39,9 @@ else:
         keyfile = base[:-5] + '-key.bin'  # Remove '-dump', add '-key.bin'
     else:
         keyfile = base + '-key.bin'
+
+# strip surrounding quotes if present
+keyfile = keyfile.strip('"\'')
 
 # Ensure relative paths are prefixed with .\ for pm3
 if not os.path.isabs(keyfile) and not keyfile.startswith('.'):
@@ -48,7 +58,7 @@ def read_1k_bytes(file_path):
 
 p = pm3.pm3()
 
-fresh_tag_UIDS = ["3A D8 2D AD", "D5 49 42 1E", "F4 13 47 D4", "DE AD BE EF", "E4 E4 47 D1"]
+fresh_tag_UIDS = ["3A D8 2D AD", "D5 49 42 1E", "F4 13 47 D4", "DE AD BE EF", "E4 E4 47 D1", "AA 55 C3 96"]
 RETRIES = args.retries if hasattr(args, 'retries') else 3
 SKIP_GEN2 = args.skip_gen2 if hasattr(args, 'skip_gen2') else True
 ECHO_TRAILER = args.echo_trailer if hasattr(args, 'echo_trailer') else False
@@ -139,16 +149,14 @@ def read_block_with_retries(blk_num):
     return False, last_out
 
 res = p.console('hf mf info')
-print(res)
 res_content = p.grabbed_output
 
+
+found_uid = None
 if res == 0 and len(res_content) > 0:
     s = color("ok", fg="green")
     lprint(f" ( {s} )", end='', prompt='')
-    print(res_content)
-    
-    # Verify if any fresh_tag_UID is present in grabbed_output
-    found_uid = None
+    lprint(res_content, prompt="[" + color("i", fg="yellow") + "] ")
     for uid in fresh_tag_UIDS:
         if uid in res_content:
             found_uid = uid
@@ -159,7 +167,7 @@ if res == 0 and len(res_content) > 0:
         lprint(f"None of UIDs {fresh_tag_UIDS} found in `hf mf info` output. Is the tag in range and the reader connected?", prompt="[" + color("!", fg="red") + "] ")
         if DEBUG:
             lprint(f"hf mf info output:\n{res_content}", prompt="[" + color("i", fg="yellow") + "] ")
-    elif not SKIP_GEN2 and "Magic capabilities... Gen 2" not in res_content:
+    elif not SKIP_GEN2 and "Magic capabilities... Write Once / FUID" not in res_content:
         lprint(f"UID {found_uid} found but tag does NOT advertise Gen 2 capabilities. Use --skip-gen2 to override (not recommended). Aborting.", prompt="[" + color("!", fg="red") + "] ")
         if DEBUG:
             lprint(f"hf mf info output:\n{res_content}", prompt="[" + color("i", fg="yellow") + "] ")
@@ -266,7 +274,6 @@ if res == 0 and len(res_content) > 0:
             raise
 
 else:
-    s = color("fail", fg="red")
-    lprint(f" ( {s} ) `hf mf info` returned no output or failed. Ensure proxmark is connected and a tag is in range.", end='', prompt='')
+    lprint(f"`hf mf info` failed (code {res}). Ensure proxmark is connected and a tag is in range.", prompt="[" + color("!", fg="red") + "] ")
     if DEBUG:
         lprint(f"hf mf info output:\n{res_content}", prompt="[" + color("i", fg="yellow") + "] ")
