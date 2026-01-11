@@ -4,6 +4,7 @@ import argparse
 import pm3
 import time
 import os
+import re
 
 try:
     # pip install ansicolors
@@ -21,6 +22,8 @@ parser.add_argument('--echo-trailer', action='store_true', default=False, help='
 parser.add_argument('--keyfile', nargs='+', help='Path to key file to use for final dump (supports unquoted paths with spaces)')
 
 args = parser.parse_args()
+
+
 # Support file and keyfile passed as multiple tokens (unquoted paths with spaces)
 if hasattr(args, 'file') and args.file:
     file = ' '.join(args.file)
@@ -54,6 +57,56 @@ def read_1k_bytes(file_path):
     if len(data) != 1024:
         raise ValueError(f"File length is {len(data)} bytes, expected 1024 bytes (1k).")
     return data
+
+
+def resolve_dump_file(path):
+    """Resolve the actual 1k dump file for a given path.
+
+    Accepts:
+    - direct path to a file (must be 1024 bytes)
+    - base path without extension (will try common suffixes)
+    - directory: will search for '*-dump.bin' then any '*.bin' file of 1k size
+    Raises FileNotFoundError if no suitable 1k file is found.
+    """
+    # Exact file path
+    if os.path.isfile(path):
+        try:
+            if os.path.getsize(path) == 1024:
+                return path
+        except Exception:
+            pass
+
+    # Directory: search for dump files
+    if os.path.isdir(path):
+        # prefer *-dump.bin, then any .bin
+        for root, dirs, files in os.walk(path):
+            for fname in files:
+                if fname.endswith('-dump.bin') or fname.endswith('.bin'):
+                    candidate = os.path.join(root, fname)
+                    try:
+                        if os.path.getsize(candidate) == 1024:
+                            return candidate
+                    except Exception:
+                        continue
+        raise FileNotFoundError(f"No suitable dump file (1k) found in directory {path}")
+
+    # Try common filename variants
+    candidates = [
+        path,
+        path + '-dump.bin',
+        path + '.bin',
+        path + '-dump',
+        os.path.join(os.path.dirname(path), os.path.basename(path) + '-dump.bin'),
+    ]
+    for c in candidates:
+        if os.path.isfile(c):
+            try:
+                if os.path.getsize(c) == 1024:
+                    return c
+            except Exception:
+                continue
+
+    raise FileNotFoundError(f"No suitable 1k dump file found for path {path}")
 
 
 p = pm3.pm3()
@@ -130,11 +183,17 @@ def write_block_with_retries(blk_num, data_hex, force=False, write_key="FFFFFFFF
     return False, last_out
 
 
-def read_block_with_retries(blk_num):
-    """Attempt to read a block up to RETRIES times."""
+def read_block_with_retries(blk_num, key="FFFFFFFFFFFF", extra_flags='-a'):
+    """Attempt to read a block up to RETRIES times.
+
+    By default uses '-a' to include full hex/ascii output and uses the default
+    key (FFFFFFFFFFFF). You can pass a different key or set extra_flags to ''
+    if you need a different read format.
+    """
     last_out = ''
     for attempt in range(1, RETRIES + 1):
-        res = p.console(f'hf mf rdbl --blk {blk_num}')
+        cmd = f'hf mf rdbl --blk {blk_num} {extra_flags} -k {key}' if key or extra_flags else f'hf mf rdbl --blk {blk_num}'
+        res = p.console(cmd)
         out = p.grabbed_output
         last_out = out
         if SIMULATE:
@@ -147,6 +206,110 @@ def read_block_with_retries(blk_num):
             lprint(f"Retrying read block {blk_num} (attempt {attempt+1}/{RETRIES})...", prompt="[" + color("i", fg="yellow") + "] ")
             time.sleep(0.5)
     return False, last_out
+
+
+# Color name guessing and swatch output were removed because the
+# guessed names were sometimes misleading and the swatch created
+# duplicate visual output. We keep only the parsed hex and a link
+# to colorhexa for detailed inspection.
+
+
+def _parse_b4_b5(b4: bytes, b5: bytes):
+    """Parse material string and Block 5 fields from raw 16-byte blocks.
+
+    Returns (material_str, color_info, weight_g, diameter_mm, diameter_note, color_link)
+    """
+    material_str = None
+    color_info = None
+    weight_g = None
+    diameter_mm = None
+    diameter_note = None
+    color_link = None
+
+    try:
+        material_str = b4.decode('ascii', errors='ignore').rstrip('\x00').strip()
+    except Exception:
+        material_str = None
+
+    try:
+        import struct
+        if len(b5) >= 16:
+            r, g, b, a = b5[0], b5[1], b5[2], b5[3]
+            hexstr = f"#{r:02X}{g:02X}{b:02X}"
+            color_info = f"{hexstr} (A={a})"
+            color_link = f"https://www.colorhexa.com/{hexstr.lstrip('#').lower()}"
+            weight_g = int.from_bytes(b5[4:6], 'little')
+
+            # Robust diameter parsing
+            try:
+                # try float64 LE but only accept plausible filament values (0.5–10 mm)
+                if len(b5) >= 16:
+                    diam64 = struct.unpack('<d', b5[8:16])[0]
+                    if 0.5 <= diam64 <= 10.0:
+                        diameter_mm = float(diam64)
+                        diameter_note = 'float64 LE'
+                # if not found, try float32 LE (same plausible range)
+                if diameter_mm is None and len(b5) >= 12:
+                    diam32 = struct.unpack('<f', b5[8:12])[0]
+                    if 0.5 <= diam32 <= 10.0:
+                        diameter_mm = float(diam32)
+                        diameter_note = 'float32 LE'
+                # last resort: uint16 at offset 8 interpreted as hundredths (val/100)
+                if diameter_mm is None and len(b5) >= 10:
+                    raw16 = int.from_bytes(b5[8:10], 'little')
+                    if 50 <= raw16 <= 10000:
+                        candidate = raw16 / 100.0
+                        if 0.5 <= candidate <= 10.0:
+                            diameter_mm = candidate
+                            diameter_note = 'uint16/100'
+            except Exception:
+                diameter_mm = None
+                diameter_note = None
+
+            if diameter_mm is None or diameter_mm == 0:
+                if DEBUG:
+                    lprint(f"Block 5 raw data: {b5.hex()}", prompt="[" + color("i", fg="yellow") + "] ")
+    except Exception:
+        color_info = None
+        weight_g = None
+        diameter_mm = None
+        diameter_note = None
+
+    return material_str, color_info, weight_g, diameter_mm, diameter_note, color_link
+
+
+# Tag-read helper removed: reading Blocks 4/5 directly from a tag requires the correct keys and
+# we no longer support direct tag reads via CLI for this script to avoid misleading output or accidental key disclosure.
+
+
+def get_material_and_color():
+    """Read Block 4 and 5 and return parsed material, color, weight, diameter.
+
+    Prefer reading from the source `.bin` file (the provided dump file). If that
+    is not available or cannot be parsed, give a warning and return Nones.
+
+    Block decoding (Block 4: material string; Block 5: color/weight/diameter)
+    follows the Bambu Lab RFID Tag Guide:
+    https://github.com/Bambu-Research-Group/RFID-Tag-Guide/blob/main/BambuLabRfid.md
+
+    Credit: Bambu Research Group and contributors (used with thanks).
+    """
+    # First, try reading from the source file (preferred)
+    try:
+        dump_path = resolve_dump_file(file)
+        dump_bytes = read_1k_bytes(dump_path)
+        blocks = [dump_bytes[i:i+16] for i in range(0, len(dump_bytes), 16)]
+        if len(blocks) >= 6:
+            return _parse_b4_b5(blocks[4], blocks[5])
+        else:
+            lprint("Source dump file does not contain enough blocks to parse material/color.", prompt="[" + color("!", fg="red") + "] ")
+    except Exception as e:
+        lprint(f"Could not read material/color from source file: {e}", prompt="[" + color("i", fg="yellow") + "] ")
+
+    # Could not parse material/color from source dump; do NOT fallback to tag.
+    lprint("Could not read material/color from the source dump. Color/material information unavailable; pick a different .bin file or proceed without color metadata.", prompt="[" + color("!", fg="yellow") + "] ")
+    return None, None, None, None, None, None
+
 
 res = p.console('hf mf info')
 res_content = p.grabbed_output
@@ -179,12 +342,29 @@ if res == 0 and len(res_content) > 0:
 
         # Ask user to confirm keyfile before proceeding
         lprint(f"Keyfile to be used for final dump: {keyfile}", prompt="[" + color("i", fg="yellow") + "] ")
+
+        material_str, color_info, weight_g, diameter_mm, diameter_note, color_link = get_material_and_color()
+
+        lprint(f"Material: {material_str if material_str else 'unknown'}", prompt="[" + color("i", fg="yellow") + "] ")
+        lprint(f"Color (RGBA): {color_info if color_info else 'unknown'}", prompt="[" + color("i", fg="yellow") + "] ")
+        if color_link:
+            lprint(f"Color reference: {color_link}", prompt="[" + color("i", fg="yellow") + "] ")
+        if weight_g is not None:
+            lprint(f"Spool weight: {weight_g} g", prompt="[" + color("i", fg="yellow") + "] ")
+        if diameter_mm is not None:
+            if diameter_note:
+                lprint(f"Filament diameter: {diameter_mm:.3f} mm ({diameter_note})", prompt="[" + color("i", fg="yellow") + "] ")
+            else:
+                lprint(f"Filament diameter: {diameter_mm:.3f} mm", prompt="[" + color("i", fg="yellow") + "] ")
+
+        # Final user confirmation before writes
         user_confirm = input("Press Enter to proceed with writes, or Ctrl+C to abort: ")
 
         # Proceed with further operations if needed
         try:
-            dump_bytes = read_1k_bytes(file)
-            lprint(f"Read {len(dump_bytes)} bytes from {file}", prompt="[" + color("✓", fg="green") + "] ")
+            dump_path = resolve_dump_file(file)
+            dump_bytes = read_1k_bytes(dump_path)
+            lprint(f"Read {len(dump_bytes)} bytes from {dump_path}", prompt="[" + color("✓", fg="green") + "] ")
 
             blocks = [dump_bytes[i:i+16].hex() for i in range(0, len(dump_bytes), 16)]
 
