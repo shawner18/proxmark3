@@ -23,7 +23,6 @@ parser.add_argument('--keyfile', nargs='+', help='Path to key file to use for fi
 
 args = parser.parse_args()
 
-
 # Support file and keyfile passed as multiple tokens (unquoted paths with spaces)
 if hasattr(args, 'file') and args.file:
     file = ' '.join(args.file)
@@ -313,7 +312,8 @@ def get_material_and_color():
 
 res = p.console('hf mf info')
 res_content = p.grabbed_output
-
+if DEBUG:
+    print(res_content)
 
 found_uid = None
 if res == 0 and len(res_content) > 0:
